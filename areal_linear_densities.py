@@ -96,6 +96,12 @@ def main():
     align = args.align
 
     fprefix = 'lindens'
+    pdb.set_trace()
+    with open(fprefix + '_inputs.txt', 'w') as fo:
+        fo.write((' ').join(sys.argv))
+        tmp = args.__dict__
+        for key in tmp:
+            fo.write(f'\n{key}= {tmp[key]}')
 
     print('Calculating densities for the following selections:')
     print(select_labels)
