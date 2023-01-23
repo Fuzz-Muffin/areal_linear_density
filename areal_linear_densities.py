@@ -96,7 +96,6 @@ def main():
     align = args.align
 
     fprefix = 'lindens'
-    pdb.set_trace()
     with open(fprefix + '_inputs.txt', 'w') as fo:
         fo.write((' ').join(sys.argv))
         tmp = args.__dict__
