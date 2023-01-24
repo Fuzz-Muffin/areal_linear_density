@@ -1,8 +1,9 @@
-import pdb, sys, multiprocessing, argparse
+import pdb, sys, multiprocessing, argparse, dask, dask.multiprocessing
 import matplotlib as mpl
 import MDAnalysis as md
 import numpy as np
 import matplotlib.pyplot as plt
+dask.config.set(scheduler='processes')
 
 from MDAnalysis import transformations as trans
 from multiprocessing import Pool
@@ -38,22 +39,24 @@ mass_map = {
     'HC ':  1.0080
 }
 
+
+
 # function to calculate all linear densities for one frame
-def dens_frame(frame_index, x, y, box, sel, nbins):
-    sel.universe.trajectory[frame_index]
+def dens_func(x, y, box, sel, nbins):
+    pos = sel.positions
+    masses = sel.masses
     blah = np.zeros(((x.shape[0]-1)*(y.shape[0]-1), nbins))
     count = -1
     for i,xx in enumerate(x[:-1]):
-        x_mask = np.logical_and(sel.positions[:,0] <= x[i+1], sel.positions[:,0] >= xx)
+        x_mask = np.logical_and(pos[:,0] <= x[i+1], pos[:,0] >= xx)
         xd = x[i+1] - x[i]
         for j,yy in enumerate(y[:-1]):
             count += 1
-            y_mask = np.logical_and(sel.positions[:,1] <= y[j+1], sel.positions[:,1] >= yy)
+            y_mask = np.logical_and(pos[:,1] <= y[j+1], pos[:,1] >= yy)
             yd = y[j+1] - y[j]
             mask = x_mask & y_mask
-            hist, bin_edges = np.histogram(sel.positions[mask,-1], bins=nbins, weights=sel[mask].masses, range=(0,box[-1]))
+            hist, bin_edges = np.histogram(pos[mask,-1], bins=nbins, weights=masses[mask], range=(0,box[-1]))
             norm = 1./(xd * yd * (bin_edges[1]-bin_edges[0]))
-
             blah[count] = hist * norm
     return blah
 
@@ -164,24 +167,29 @@ def main():
     # loop over different selections
     dens_lists = np.zeros((len(selections), nframes, xbins * ybins, zbins))
     bin_edges = np.linspace(0., box[-1], zbins +1)
-    for i, (sel,label) in enumerate(zip( selections, select_labels)):
-        print(f'Working on {label}')
-        # fancy per frame function
-        run_per_frame = partial(dens_frame,
-                                x=x,
-                                y=y,
-                                box=box,
-                                sel=sel,
-                                nbins=zbins
-                               )
 
-        # parallel loop
-        frame_values = np.arange(nframes)
-        with Pool(n_jobs) as worker_pool:
-            res = worker_pool.map(run_per_frame, frame_values)
+    # the 'split and apply method'@dask.delayed
+    def analyse_block(blockslice, func, *args):
+        res = []
+        for ts in u.trajectory[blockslice.start:blockslice.stop]:
+            blah = func(*args)
+            res.append(blah)
+        return res
+
+    n_blocks = n_jobs
+    n_frames_per_block = nframes // n_blocks
+    blocks = [range(i * n_frames_per_block, (i + 1) * n_frames_per_block) for i in range(n_blocks-1)]
+    blocks.append(range((n_blocks - 1) * n_frames_per_block, nframes))
+
+    for i, (sel,label) in enumerate(zip( selections, select_labels)):
+        jobs = []
+        for bs in blocks:
+            jobs.append(analyse_block(bs, dens_func, x, y, box, sel, zbins))
+        jobs = dask.delayed(jobs)
+        results = jobs.compute()
 
         # get results and normalise
-        np.array(res)
+        res = np.concatenate(results)
         dens_lists[i] = res
 
     # save non-shifted mean density profiles
